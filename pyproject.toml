@@ -1,0 +1,8 @@
+[project]
+name = "variational-quantum-eigensolver"
+version = "0.1.0"
+requires-python = ">=3.13.5"
+dependencies = [
+    "numpy>=2.5.3",
+    "scipy>=1.18.1",
+]
