@@ -5,7 +5,7 @@ Command-lines Args:
         --layers <num of layers>
         --circuit "<circuit>"
         --omega <qubit 1> ... <qubit n>
-        --J <Jx> <Jy> <Jz>
+        --J <Jx Jy Jz for pair 1,2> ... <for pair n-1,n>
         --restarts <num of optimizer starting angles to try>
         --seed <for reproducibility>
 """
@@ -14,7 +14,6 @@ Command-lines Args:
 import argparse
 import numpy as np
 from scipy.optimize import minimize
-
 
 # COST FUNCTION PARAMS
 ALPHA = 100
@@ -25,6 +24,9 @@ ETA = 0.10
 ZETA = 5
 NOISE_PER_LAYER = 0.05
 
+# HAMILTONIAN PARAMETER BOX
+OMEGA_RANGE = (0.5, 1.5)
+J_RANGE = (-0.5, 0.5)
 
 # CONSTRUCTING QUANTUM GATES
 # pauli gates
@@ -41,6 +43,7 @@ GENERATOR = {
     "ex": (np.kron(X, X) + np.kron(Y, Y)) / 2,
     "zz": np.kron(Z, Z) / 2,
 }
+
 
 def gate_matrix(control, theta):
     # contructs the resource set
@@ -61,7 +64,7 @@ def operator_on(num_qubits, matrix_on_qubit):
     return full_operator
 
 def build_hamiltonian(num_qubits, omegas, couplings):
-    Jx, Jy, Jz = couplings
+    # couplings[q] = (Jx, Jy, Jz) for the pair q, q+1
     dimension = 2**num_qubits
     hamiltonian = np.zeros((dimension, dimension), dtype=complex)
 
@@ -72,6 +75,7 @@ def build_hamiltonian(num_qubits, omegas, couplings):
     # coupling terms between qubit and qubit+1
     for qubit in range(num_qubits - 1):
         couple = qubit + 1
+        Jx, Jy, Jz = couplings[qubit]
         hamiltonian += Jx * operator_on(num_qubits, {qubit: X, couple: X})
         hamiltonian += Jy * operator_on(num_qubits, {qubit: Y, couple: Y})
         hamiltonian += Jz * operator_on(num_qubits, {qubit: Z, couple: Z})
@@ -222,23 +226,33 @@ def main():
     parser.add_argument("--layers", type=int, default=1)
     parser.add_argument("--circuit", required=True)
     parser.add_argument("--omega", type=float, nargs="+")
-    parser.add_argument("--J", type=float, nargs=3, default=[0.3, 0.1, 0.2])
+    parser.add_argument("--J", type=float, nargs="+")
     parser.add_argument("--restarts", type=int, default=20)
     parser.add_argument("--seed", type=int, default=202680)
     args = parser.parse_args()
 
     num_qubits = args.qubits
+    rng = np.random.default_rng(args.seed)
 
-    # default alternating zeeman splittings for now
+    # random zeeman splittings unless given
     if args.omega is None:
-        omegas = [1.0 if qubit % 2 == 0 else 0.8 for qubit in range(num_qubits)]
+        omegas = rng.uniform(*OMEGA_RANGE, num_qubits)
     elif len(args.omega) == 1:
         omegas = args.omega * num_qubits
     else:
         omegas = args.omega
 
+    # random couplings unless given
+    num_pairs = num_qubits - 1
+    if args.J is None:
+        couplings = rng.uniform(*J_RANGE, (num_pairs, 3))
+    elif len(args.J) == 3:
+        couplings = [args.J] * num_pairs
+    else:
+        couplings = np.reshape(args.J, (num_pairs, 3))
+
     # answer key for eigenvalues and eigenvectors of the hamiltonian
-    hamiltonian = build_hamiltonian(num_qubits, omegas, args.J)
+    hamiltonian = build_hamiltonian(num_qubits, omegas, couplings)
     eigenvalues, eigenvectors = np.linalg.eigh(hamiltonian)
     ground_energy = eigenvalues[0]
     ground_states = eigenvectors[:, eigenvalues < ground_energy + 1e-9]
@@ -247,7 +261,6 @@ def main():
     steps, parameters = repeat_layers(parse_circuit(args.circuit), args.layers)
 
     # optimize from many random angles
-    rng = np.random.default_rng(args.seed)
     best_vector = np.array([])
 
     if parameters:
@@ -284,10 +297,16 @@ def main():
     )
 
     # print report
-    print(f"Cost = {cost:.4f}")
+    print(f"Cost: {cost:.5f}")
     print(f"Reached Ground Energy: {'YES' if energy_error < 1e-6 else 'NO'}"
           f"\n\tCircuit Energy E = {energy:.5f}"
           f"\n\tTrue Ground Energy = {ground_energy:.5f}")
+
+    print("Hamiltonian Parameters:")
+    for qubit, omega in enumerate(omegas, 1):
+        print(f"\tomega_{qubit} = {omega:.5f}")
+    for pair, (Jx, Jy, Jz) in enumerate(couplings, 1):
+        print(f"\tJ_{pair},{pair + 1} = ({Jx:.5f}, {Jy:.5f}, {Jz:.5f})")
     
     if parameters:
         print("Optimized Angles:")
